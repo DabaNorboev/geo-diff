@@ -1,0 +1,63 @@
+services:
+    geo_web:
+        container_name: geo_web
+        image: nginx
+        ports:
+            - "80:80"
+        volumes:
+            - ./docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+            - .:/var/www/html
+        depends_on:
+            - geo_php
+            - geo_db
+
+    geo_php:
+        container_name: geo_php
+        build: ./docker/php
+        volumes:
+            - .:/var/www/html
+        #      - ./docker/php/xdebug.ini:/usr/local/etc/php/conf.d/docker-php-xdebug.ini
+        depends_on:
+            - geo_db
+            - geo_redis
+
+    geo_queue:
+        container_name: geo_queue
+        build: ./docker/php
+        command: php artisan queue:work --tries=3
+        volumes:
+            - .:/var/www/html
+        depends_on:
+            - geo_db
+            - geo_redis
+
+    geo_vite:
+        container_name: geo_vite
+        image: node:20-alpine
+        working_dir: /var/www/html
+        command: sh -c "npm install && npm run dev -- --host"
+        ports:
+            - "5173:5173"
+        volumes:
+            - .:/var/www/html
+
+    geo_db:
+        container_name: geo_db
+        image: postgis/postgis:16-3.4
+        environment:
+            - POSTGRES_USER=${DB_USERNAME}
+            - POSTGRES_PASSWORD=${DB_PASSWORD}
+            - POSTGRES_DB=${DB_DATABASE}
+        ports:
+            - "54333:5432"
+        volumes:
+            - geo_db_data:/var/lib/postgresql/data
+
+    geo_redis:
+        container_name: geo_redis
+        image: redis:7-alpine
+        ports:
+            - "63799:6379"
+
+volumes:
+    geo_db_data:
