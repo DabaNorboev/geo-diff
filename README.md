@@ -1,58 +1,86 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# GeoDiff — веб-инструмент пространственного анализа качества геокодирования
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+Инструмент для сравнения качества геокодирования адресных данных между двумя независимыми открытыми геокодерами. Пользователь загружает список адресов → система параллельно геокодирует каждый через Nominatim и Photon → сравнивает полученные координаты → визуализирует расхождения на интерактивной карте с хороплетом по районам и текстовым отчётом.
 
-## About Laravel
+Дополнительно рассчитывается глобальный индекс Морана — статистический показатель, позволяющий проверить, есть ли пространственная закономерность в расхождениях между районами города, или они распределены случайно.
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+Демонстрационный город — Красноярск (границы районов импортированы из OpenStreetMap, `admin_level=9`).
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## Зачем это нужно
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+Бесплатные геокодеры (в отличие от платных сервисов вроде Google/Яндекс) не всегда согласуются друг с другом в результатах, особенно на неточных или неполных адресах. Инструмент даёт наглядный способ:
+- увидеть, где именно в городе геокодеры расходятся сильнее всего;
+- проверить, есть ли пространственная закономерность в расхождениях (индекс Морана) или они случайны;
+- разобрать конкретные причины, по которым тот или иной адрес не был найден.
 
-## Learning Laravel
+## Технологический стек
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+**Backend:** PHP 8.3, Laravel 11, PostgreSQL 16 + PostGIS 3.4, Redis 7 (Predis), Laravel Horizon
+**Frontend:** Vue 3 (Composition API, `<script setup>`), Pinia, Vue Router, MapLibre GL JS, Tailwind CSS
+**Инфраструктура:** Docker Compose, Nginx, PHP-FPM
+**Внешние API:** Overpass API (импорт районов), Nominatim, Photon
 
-In addition, [Laracasts](https://laracasts.com) contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+Без WebSocket — обновление статуса обработки через polling (10 сек).
 
-You can also watch bite-sized lessons with real-world projects on [Laravel Learn](https://laravel.com/learn), where you will be guided through building a Laravel application from scratch while learning PHP fundamentals.
+## Основной функционал
 
-## Agentic Development
+- Загрузка списка адресов в формате **CSV** (с колонкой `address`), **TXT** (адрес на строке) или **JSON** (массив строк или объектов `{"address": "..."}`)
+- Параллельное геокодирование через Nominatim и Photon с ограничением по bbox города
+- Расчёт расхождения между результатами геокодеров (в метрах), выделение выбросов (>1000 м) и «проблемных» адресов (>50 м, настраиваемый порог)
+- Интерактивная карта на MapLibre GL: точки совпадений, расхождений и выбросов, линии между парами точек, хороплет районов по среднему расхождению
+- Глобальный индекс Морана для оценки пространственной автокорреляции расхождений между районами
+- Текстовый отчёт по каждому адресу с категоризацией (точное совпадение / расхождение / выброс / найден одним геокодером / не найден)
+- Экспорт результатов в GeoJSON (точки, районы, пары)
+- **Повторный поиск** для проблемных адресов — система предлагает автоматически упрощённый вариант адреса (например, срезает «строение N» / «корпус N», которые часто мешают геокодерам), пользователь может отредактировать перед подтверждением
+- Кэширование результатов геокодирования в Redis с версионированием (позволяет безопасно выкатывать фиксы логики парсинга без ручной инвалидации) и раздельным TTL для успешных и отрицательных результатов
 
-Laravel's predictable structure and conventions make it ideal for AI coding agents like Claude Code, Cursor, and GitHub Copilot. Install [Laravel Boost](https://laravel.com/docs/ai) to supercharge your AI workflow:
+## Архитектурные решения
+
+- **Геокодеры:** Nominatim + Photon. Яндекс исключён (лицензия запрещает отображение результатов вне Яндекс.Карт), Google — недоступен для оплаты из РФ на момент разработки. Архитектура расширяема для добавления новых провайдеров.
+- **Разделение сетевых ошибок и легитимного "не найдено"**: сетевые/HTTP-ошибки при обращении к геокодерам не кэшируются и не интерпретируются как "адрес не существует" — они пробрасываются исключением и обрабатываются через retry с экспоненциальным backoff и джиттером. Только валидный пустой ответ геокодера трактуется как отрицательный результат.
+- **bbox-фильтр**: точки за пределами географических границ Красноярска отбрасываются как ложные совпадения (актуально для омонимичных названий улиц в других населённых пунктах края).
+- Авторизация не реализована намеренно (вне рамок текущей задачи) — `user_id` в схеме сделан nullable для потенциального расширения в будущем.
+
+## Известные ограничения
+
+В ходе разработки были системно разобраны причины, по которым геокодеры не находят часть адресов:
+- отсутствие в адресе родового слова (улица/проспект/…) — исходный текст не совпадает с ожидаемым геокодером форматом;
+- расхождение между бытовым сокращённым названием улицы и официальным полным (например, «Вавилова» вместо «Академика Вавилова»);
+- составные номера домов («строение N», «корпус N») — не всегда корректно парсятся геокодерами;
+- зависимость от доступности и сетевых ограничений публичных бесплатных геокодеров (нет SLA, возможны временные блокировки на уровне сети).
+
+Эти находки легли в основу функции автоматического упрощения адреса при повторном поиске.
+
+## Запуск проекта
 
 ```bash
-composer require laravel/boost --dev
-
-php artisan boost:install
+docker compose up -d --build
+docker exec -it geo_php php artisan migrate
+docker exec -it geo_php php artisan districts:import
 ```
 
-Boost provides your agent 15+ tools and skills that help agents build Laravel applications while following best practices.
+Приложение будет доступно на `http://localhost`.
 
-## Contributing
+## Artisan-команды
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+```bash
+php artisan districts:import              # импорт границ районов из OSM
+php artisan sessions:clear                # очистка сессионных данных
+php artisan sessions:clear --with-cache   # + полная очистка кэша Laravel
+php artisan geocode:cache-clear           # точечная очистка кэша геокодирования (оба провайдера)
+php artisan geocode:cache-clear --provider=photon  # только для одного провайдера
+```
 
-## Code of Conduct
+## Структура API
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
-
-## Security Vulnerabilities
-
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
-
-## License
-
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+```
+POST /api/sessions                          — загрузка файла с адресами
+GET  /api/sessions/{id}                     — статус обработки и агрегаты (для polling)
+GET  /api/sessions/{id}/export/points       — GeoJSON: точки геокодирования
+GET  /api/sessions/{id}/export/districts    — GeoJSON: районы со статистикой
+GET  /api/sessions/{id}/export/pairs        — GeoJSON: пары точек + линии расхождений
+GET  /api/sessions/{id}/coverage            — статистика покрытия геокодерами
+GET  /api/sessions/{id}/report              — данные для текстового отчёта
+GET  /api/sessions/{id}/retry-candidates    — кандидаты на повторный поиск с предложенным упрощением адреса
+POST /api/sessions/{id}/retry               — запуск повторного поиска для выбранных адресов
+```
